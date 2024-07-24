@@ -181,8 +181,8 @@ model = dict(
         memo_tracklet_frames=10,
         memo_momentum=0.8,
         with_cats=False,
-        max_distance=100,
-        fps=30,
+        max_distance=500,           # default: 100
+        fps=5,                      # default: 30
         )
 )
 
@@ -192,7 +192,7 @@ inference_pipeline = [
         transforms=[
             dict(
                 type='Resize',
-                scale=(1024, 1024),
+                scale=(1024, 608),          # default (1024, 1024)
                 keep_ratio=True),
         ]),
     dict(type='PackTrackInputs')

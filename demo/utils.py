@@ -43,7 +43,7 @@ def average_score_filter(instances_list):
     return instances_list
 
 
-def moving_average_filter(instances_list, window_size=5):
+def moving_average_filter(instances_list, window_size=5, confidence_threshold=0.2):
     # Helper function to compute the moving average
     def smooth_bbox(bboxes, window_size):
         smoothed_bboxes = np.copy(bboxes)
@@ -56,18 +56,23 @@ def moving_average_filter(instances_list, window_size=5):
     # Extract bounding boxes and instance IDs
     instance_id_to_frames = defaultdict(list)
     instance_id_to_bboxes = defaultdict(list)
+    instance_id_to_scores = defaultdict(list)
+
     for frame_idx, instances in enumerate(instances_list):
         for i, instance_id in enumerate(instances[0].pred_track_instances.instances_id):
             instance_id_to_frames[instance_id.item()].append(frame_idx)
             instance_id_to_bboxes[instance_id.item()].append(instances[0].pred_track_instances.bboxes[i].cpu().numpy())
+            instance_id_to_scores[instance_id.item()].append(instances[0].pred_track_instances.scores[i].cpu().numpy())
 
     # Apply moving average filter to each segment
     for instance_id, frames in instance_id_to_frames.items():
         bboxes = np.array(instance_id_to_bboxes[instance_id])
+        scores = np.array(instance_id_to_scores[instance_id])
 
         # Identify segments
         segments = []
         segment = [frames[0]]
+
         for idx in range(1, len(frames)):
             if frames[idx] == frames[idx - 1] + 1:
                 segment.append(frames[idx])
@@ -75,19 +80,30 @@ def moving_average_filter(instances_list, window_size=5):
                 segments.append(segment)
                 segment = [frames[idx]]
         segments.append(segment)
+        
+        score_segments = [scores[frames.index(segment[0]):frames.index(segment[-1]) + 1] for segment in segments]
+        
+        # We want to check that at least window_size detections in every segment have confidence score >= confidence_threshold
+        segments_filtered = [np.sum(score_segment >= confidence_threshold) > window_size for score_segment in score_segments]
+
+        if np.sum(segments_filtered) == 0:
+            for frame_idx in frames:
+                frame_instances = instances_list[frame_idx][0].pred_track_instances
+                mask = frame_instances.instances_id == instance_id
+                frame_instances.scores[mask] *= 0
 
         # Smooth bounding boxes for each segment
-        smoothed_bboxes = np.copy(bboxes)
-        for segment in segments:
-            if len(segment) >= window_size:
-                segment_bboxes = bboxes[frames.index(segment[0]):frames.index(segment[-1]) + 1]
-                smoothed_segment_bboxes = smooth_bbox(segment_bboxes, window_size)
-                smoothed_bboxes[frames.index(segment[0]):frames.index(segment[-1]) + 1] = smoothed_segment_bboxes
+        # smoothed_bboxes = np.copy(bboxes)
+        # for segment in segments:
+        #     if len(segment) >= window_size:
+        #         segment_bboxes = bboxes[frames.index(segment[0]):frames.index(segment[-1]) + 1]
+        #         smoothed_segment_bboxes = smooth_bbox(segment_bboxes, window_size)
+        #         smoothed_bboxes[frames.index(segment[0]):frames.index(segment[-1]) + 1] = smoothed_segment_bboxes
 
         # Update instances_list with smoothed bounding boxes
-        for frame_idx, smoothed_bbox in zip(frames, smoothed_bboxes):
-            instances_list[frame_idx][0].pred_track_instances.bboxes[
-                instances_list[frame_idx][0].pred_track_instances.instances_id == instance_id] = torch.tensor(smoothed_bbox, dtype=instances_list[frame_idx][0].pred_track_instances.bboxes.dtype).to(instances_list[frame_idx][0].pred_track_instances.bboxes.device)
+        # for frame_idx, smoothed_bbox in zip(frames, smoothed_bboxes):
+        #     instances_list[frame_idx][0].pred_track_instances.bboxes[
+        #         instances_list[frame_idx][0].pred_track_instances.instances_id == instance_id] = torch.tensor(smoothed_bbox, dtype=instances_list[frame_idx][0].pred_track_instances.bboxes.dtype).to(instances_list[frame_idx][0].pred_track_instances.bboxes.device)
 
     return instances_list
 
@@ -174,10 +190,9 @@ def filter_and_update_tracks(instances_list, image_size, size_threshold=10000, c
     instances_list = identify_and_remove_giant_bounding_boxes(instances_list, image_size, size_threshold, confidence_threshold, coverage_threshold)
 
      # Step 2: Smooth interpolated bounding boxes
-    instances_list = moving_average_filter(instances_list, window_size=smoothing_window_size)
+    instances_list = moving_average_filter(instances_list, window_size=smoothing_window_size, confidence_threshold=confidence_threshold)
 
     # Step 3: compute the track average score
     instances_list = average_score_filter(instances_list)
-
 
     return instances_list

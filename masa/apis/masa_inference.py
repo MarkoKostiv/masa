@@ -247,9 +247,12 @@ def inference_masa(
             data["data_samples"][0].video_data_samples[0].det_labels = det_labels
         # measure FPS ##
         if show_fps:
+            torch.cuda.synchronize()
             start = time.time()
             with autocast(enabled=fp16):
                 result = model.test_step(data)[0]
+
+            torch.cuda.synchronize()
             end = time.time()
             fps = 1 / (end - start)
             return result, fps

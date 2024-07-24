@@ -9,6 +9,7 @@ import resource
 import argparse
 import cv2
 import tqdm
+import numpy as np
 
 import torch
 from torch.multiprocessing import Pool, set_start_method
@@ -77,6 +78,7 @@ def parse_args():
     parser.add_argument('--sam_mask', action='store_true', help='Use SAM to generate mask for segmentation tracking')
     parser.add_argument('--sam_path',  type=str, default='saved_models/pretrain_weights/sam_vit_h_4b8939.pth', help='Default path for SAM models')
     parser.add_argument('--sam_type', type=str, default='vit_h', help='Default type for SAM models')
+    parser.add_argument('--window_size', type=int, default=5, help='Window size')
     parser.add_argument(
         '--wait-time',
         type=float,
@@ -162,10 +164,16 @@ def main():
                                             test_pipeline=test_pipeline,
                                             fp16=args.fp16)
 
+            # FILTERING DETECTOR OUTUTS
+            # TODO: threshold to config
+            det_thr = 0.2         # 0.0 or 0.2
+            mask = result.pred_instances.scores >= det_thr
+            # print(f"Using {sum(mask)}/{len(mask)} preds")
+
             # Perfom inter-class NMS to remove nosiy detections
-            det_bboxes, keep_idx = batched_nms(boxes=result.pred_instances.bboxes,
-                                               scores=result.pred_instances.scores,
-                                               idxs=result.pred_instances.labels,
+            det_bboxes, keep_idx = batched_nms(boxes=result.pred_instances.bboxes[mask].float(),
+                                               scores=result.pred_instances.scores[mask].float(),
+                                               idxs=result.pred_instances.labels[mask].float(),
                                                class_agnostic=True,
                                                nms_cfg=dict(type='nms',
                                                              iou_threshold=0.5,
@@ -199,8 +207,12 @@ def main():
         if args.show_fps:
             fps_list.append(fps)
 
+        if frame_idx == 350:
+            np.save(args.out.replace('.mp4', '.npy'), fps_list)
+            break
+
     if not args.no_post:
-        instances_list = filter_and_update_tracks(instances_list, (frame.shape[1], frame.shape[0]))
+        instances_list = filter_and_update_tracks(instances_list, (frame.shape[1], frame.shape[0]), smoothing_window_size=args.window_size)
 
     if args.sam_mask:
         print('Start to generate mask using SAM!')
@@ -248,6 +260,7 @@ def main():
     if video_writer:
         video_writer.release()
     print('Done')
+    print(f"result video is saved to {os.path.abspath(args.out)}")
 
 
 if __name__ == '__main__':
